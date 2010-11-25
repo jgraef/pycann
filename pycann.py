@@ -15,7 +15,7 @@
 # You should have received a copy of the GNU Lesser General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-from ctypes import CDLL, c_void_p, c_uint, c_float, c_char_p
+from ctypes import CDLL, c_void_p, c_uint, c_int, c_float, c_char_p
 
 
 # load library
@@ -29,10 +29,12 @@ pycann_float_t = c_float
 def __init_prototypes__(l):
     prototypes = [[l.pycann_get_error, c_char_p],
                   [l.pycann_reset_error, None],
-                  [l.pycann_new, pycann_t, c_uint, c_uint, c_uint],
+                  [l.pycann_new, pycann_t, c_uint, c_uint, c_uint, c_uint],
                   [l.pycann_del, None, pycann_t],
+                  [l.pycann_is_threading_enabled, c_uint],
                   [l.pycann_get_memory_usage, c_uint, pycann_t],
                   [l.pycann_get_size, c_uint, pycann_t],
+                  [l.pycann_get_num_threads, c_uint, pycann_t],
                   [l.pycann_get_learning_rate, pycann_float_t, pycann_t],
                   [l.pycann_set_learning_rate, None, pycann_t, pycann_float_t],
                   [l.pycann_get_gamma, pycann_float_t, pycann_t, c_uint],
@@ -48,7 +50,12 @@ def __init_prototypes__(l):
                   [l.pycann_set_mod, None, pycann_t, c_uint, c_uint, pycann_float_t],
                   [l.pycann_set_inputs, None, pycann_t, pycann_float_t],
                   [l.pycann_get_outputs, None, pycann_t, pycann_float_t],
-                  [l.pycann_step, None, pycann_t, c_uint]]
+                  [l.pycann_get_num_inputs, c_uint, pycann_t],
+                  [l.pycann_get_num_outputs, c_uint, pycann_t],
+                  [l.pycann_set_random_weights, None, pycann_t, pycann_float_t],
+                  [l.pycann_step, None, pycann_t, c_uint],
+                  [l.pycann_load_file, pycann_t, c_char_p, c_uint],
+                  [l.pycann_save_file, c_int, c_char_p, pycann_t]]
 
     for p in prototypes:
         p[0].restype = p[1]
@@ -69,26 +76,58 @@ class PyCANNException(Exception):
         return self.errstr
 
 
-class PyCANN:
+THREADING = bool(__libpycann__.pycann_is_threading_enabled())
+
+class Network:
     """ Class wrapping C neural network library """
     l = __libpycann__
+    net = None
 
-    def __init__(self, num_inputs, num_interneurons, num_outputs):
+    def __init__(self, *args):
+        """ Contructor:
+pycann.Network(num_inputs, num_interneurons, num_outputs [, num_threads])
+pycann.Network(path [, num_threads]) """
+
+        # check if threading is supported
+        if (not THREADING):
+            num_threads = 1
+
+        # check whether to create or load
+        num_args = len(args)
+        if (num_args in (3, 4)):
+            self.init_new(*args)
+        elif (num_args in (1, 2)):
+            self.init_load(*args)
+        else:
+            raise AttributeError("Unknown constructor with "+str(num_args)+" arguments.")
+
+        # these values will never change, so we can hold them here too
+        self.size = self.l.pycann_get_size(self.net)
+        self.memory_usage = self.l.pycann_get_memory_usage(self.net)
+        self.num_inputs = self.l.pycann_get_num_inputs(self.net)
+        self.num_outputs = self.l.pycann_get_num_outputs(self.net)
+        self.num_threads = self.l.pycann_get_num_threads(self.net)
+        
+    def init_new(self, num_inputs, num_interneurons, num_outputs, num_threads = 1):
         """ Creates a new neural network """
+        
+        # create neural network
         size = num_inputs + num_interneurons + num_outputs
-        self.net = self.l.pycann_new(c_uint(size), num_inputs, num_outputs)
+        self.net = self.l.pycann_new(size, num_inputs, num_outputs, num_threads)
         if (not self.net):
             raise PyCANNException()
-        
-        # these values will never change, so we can hold them here too
-        self.size = size
-        self.memory_usage = self.l.pycann_get_memory_usage(self.net)
-        self.num_inputs = num_inputs
-        self.num_outputs = num_outputs
+
+    def init_load(self, path, num_threads = 1):
+        """ Loads a neural network from file """
+        # load neural network from file
+        self.net = self.l.pycann_load_file(c_char_p(path), num_threads)
+        if (not self.net):
+            raise PyCANNException()
 
     def __del__(self):
         """ Deletes the neural network """
-        self.l.pycann_del(self.net)
+        if (self.net!=None):
+            self.l.pycann_del(self.net)
 
     def get_learning_rate(self):
         return self.l.pycann_get_learning_rate(self.net).value
@@ -132,10 +171,13 @@ class PyCANN:
     def set_mod_connection(self, i, j, weight):
         self.l.pycann_set_mod(self.net, c_uint(i), c_uint(j), pycann_float_t(weight))
 
+    def set_random_weights(self, connrate = 1.0):
+        self.l.pycann_set_random_weights(self.net, pycann_float_t(connrate))
+
     def step(self, n = 1):
         self.l.pycann_step(self.net, c_uint(n))
 
-__all__ = [PyCANN]
+__all__ = [Network]
 
 
 if (__name__=="__main__"):
@@ -162,42 +204,65 @@ if (__name__=="__main__"):
     random.setstate(pickle.load(open("random.pkl", "rb")))
 
     T = Timer()
-    neurons = 10000
-    connections = 250000 # 25 connections per neuron
-    steps = 1
-    net = PyCANN(0, neurons, 0)
+    N = list(map(lambda x: int(10**(0.1*x)), range(10, 41)))
+    #N = [1000]
+    connrate = 0.75
+    steps = 10
+    threads = 1
+    performance = []
 
-    # connect neurons
-    T.start("Connecting neurons")
-    for i in range(neurons):
-        for j in range(int(connections/neurons)):
-            net.set_weight(i, j, random.uniform(-1.0, 1.0))
-    T.stop()
+    for neurons in N:
+        net = Network(0, neurons, 0, threads)
 
-    # learning
-    net.set_learning_rate(1.0)
-    T.start("Connecting modularity neurons")
-    for i in range(neurons):
-        w = random.uniform(-1.0, 1.0)
-        if (abs(w)<0.25): # 1/4 neurons have a modularity neuron
-            w = 0.0
-        net.set_mod_connection(i, random.randrange(neurons), w)
-    T.stop()
+        # connect neurons
+        #T.start("Connecting neurons")
+        #for i in range(neurons):
+        #    for j in range(int(neurons*connrate)):
+        #        net.set_weight(i, j, random.uniform(-1.0, 1.0))
+        #T.stop()
+        net.set_random_weights(0.75)
 
-    # run
-    T.start()
-    net.step(steps)
-    t = T.stop()
+        # learning
+        #net.set_learning_rate(1.0)
+        #T.start("Connecting modularity neurons")
+        #for i in range(neurons):
+        #    w = random.uniform(-1.0, 1.0)
+        #    if (abs(w)<0.05): # 95% neurons have a modularity neuron
+        #        w = 0.0
+        #    net.set_mod_connection(i, random.randrange(neurons), w)
+        #T.stop()
 
-    # print statistics
-    # NOTE we need to get down to 1ms per step to have a realistic simulation.
-    print()
-    print("Statistics:")
-    print("Neurons:     "+str(neurons))
-    print("Connections: "+str(connections))
-    print("             "+str(connections/neurons)+" per neuron")
-    print("Steps:       "+str(steps))
-    print("Time:        "+str(t)+"s")
-    print("             "+str(t/steps)+"s/step")
-    print("Memory:      "+str(net.memory_usage/(1024*1024))+"MB")
+        # run
+        T.start()
+        net.step(steps)
+        t = T.stop()
 
+        # print statistics
+        # NOTE we need to get down to 1ms per step to have a realistic simulation.
+        connections = int(neurons**2*connrate)
+        print()
+        print("Statistics:")
+        print("Neurons:     "+str(net.size))
+        print("Connections: "+str(connections))
+        print("             "+str(connections/neurons)+" per neuron")
+        print("Threads:     "+str(net.num_threads))
+        print("Steps:       "+str(steps))
+        print("Time:        "+str(t)+"s")
+        print("             "+str(t/steps)+"s/step")
+        print("             "+str(t/(neurons*steps))+"s/(neuron*step)")
+        print("             "+str(t/(connections*steps))+"s/(connection*step)")
+        print("Memory:      "+str(net.memory_usage/1024)+"kB")
+
+        # record performace
+        performance.append((neurons, connections, t/steps, net.memory_usage))
+
+    fn = "performance_without_learning"
+    pickle.dump(performance, open(fn+".pkl", "wb"))
+
+    f = open(fn+".txt", "wt")
+    for n in performance:
+        t = n[2]/n[1]
+        l = str(n[0])+":\t "+str(t*1000000000)+"ns"
+        print(l)
+        print(l, file = f)
+    f.close()

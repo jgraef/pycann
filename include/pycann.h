@@ -21,7 +21,7 @@
 #define _PYCANN_H_
 
 // Define this to use multi-threading
-#define PYCANN_THREADING
+//#define PYCANN_THREADING
 
 #ifdef PYCANN_THREADING
 #include <pthread.h>
@@ -32,7 +32,20 @@
 
 typedef float pycann_float_t;
 
-typedef struct {
+typedef struct pycann_struct pycann_t;
+
+#ifdef PYCANN_THREADING
+typedef struct pycann_thread_struct pycann_thread_t;
+
+struct pycann_thread_struct {
+  pthread_t thread;
+  unsigned int first_neuron;
+  unsigned int last_neuron; // actually this is the neuron after the last one
+  unsigned int steps;
+};
+#endif /* PYCANN_THREADING */
+
+struct pycann_struct {
   // Number of neurons
   unsigned int size;
 
@@ -69,19 +82,33 @@ typedef struct {
 #ifdef PYCANN_THREADING
   // Threading
   unsigned int num_threads;
-  pthread_t *threads;
+  pycann_thread_t *threads;
 #endif /* PYCANN_THREADING */
-} pycann_t;
+};
+
+#define PYCANN_FILE_SIGNATURE "PYCANN_NETWORK\0\1"
+#define PYCANN_FILE_SIGNATURE_LENGTH 16
+struct pycann_file_header {
+  char signature[PYCANN_FILE_SIGNATURE_LENGTH];
+
+  unsigned int size;
+  double learning_rate;
+  double gamma[4];
+  unsigned int num_inputs;
+  unsigned int num_outputs;
+};
 
 
 const char *pycann_get_error(void);
 void pycann_reset_error(void);
 
-pycann_t *pycann_new(unsigned int size, unsigned int num_inputs, unsigned int num_outputs);
+pycann_t *pycann_new(unsigned int size, unsigned int num_inputs, unsigned int num_outputs, unsigned int num_threads);
 void pycann_del(pycann_t *net);
 
+unsigned int pycann_is_threading_enabled(void);
 unsigned int pycann_get_memory_usage(pycann_t *net);
 unsigned int pycann_get_size(pycann_t *net);
+unsigned int pycann_get_num_threads(pycann_t *net);
 
 pycann_float_t pycann_get_learning_rate(pycann_t *net);
 void pycann_set_learning_rate(pycann_t *net, pycann_float_t v);
@@ -91,6 +118,7 @@ void pycann_set_gamma(pycann_t *net, unsigned int i, pycann_float_t v);
 
 pycann_float_t pycann_get_weight(pycann_t *net, unsigned int i, unsigned int j);
 void pycann_set_weight(pycann_t *net, unsigned int i, unsigned int j, pycann_float_t v);
+void pycann_set_random_weights(pycann_t *net, pycann_float_t connection_rate);
 
 pycann_float_t pycann_get_threshold(pycann_t *net, unsigned int i);
 void pycann_set_threshold(pycann_t *net, unsigned int i, pycann_float_t v);
@@ -102,9 +130,14 @@ unsigned int pycann_get_mod_neuron(pycann_t *net, unsigned int i);
 pycann_float_t pycann_get_mod_weight(pycann_t *net, unsigned int i);
 void pycann_set_mod(pycann_t *net, unsigned int i, unsigned int j, pycann_float_t weight);
 
+unsigned int pycann_get_num_inputs(pycann_t *net);
+unsigned int pycann_get_num_outputs(pycann_t *net);
 void pycann_set_inputs(pycann_t *net, pycann_float_t *inputs);
 void pycann_get_outputs(pycann_t *net, pycann_float_t *outputs);
 
 void pycann_step(pycann_t *net, unsigned int n);
+
+pycann_t *pycann_load_file(const char *path, unsigned int num_threads);
+int pycann_save_file(const char *path, pycann_t *net);
 
 #endif /* _PYCANN_H_ */
