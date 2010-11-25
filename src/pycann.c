@@ -19,7 +19,7 @@
 
 #include <stdlib.h> /* malloc, free */
 #include <stdarg.h> /* va_list, va_start, va_end */
-#include <stdio.h> /* vsnprintf */
+#include <stdio.h> /* vsnprintf, fopen, fclose, fread, fwrite */
 #include <string.h> /* memcpy */
 
 #ifdef PYCANN_THREADING
@@ -132,9 +132,9 @@ pycann_t *pycann_new(unsigned int size, unsigned int num_inputs, unsigned int nu
   net->weights = pycann_malloc(net, sizeof(pycann_float_t)*size*size);
   net->thresholds = pycann_malloc(net, sizeof(pycann_float_t)*size);
   net->activations = pycann_malloc(net, sizeof(pycann_float_t)*size);
-  net->mod_neurons = pycann_malloc(net, sizeof(unsigned int)*size);
+  net->mod_neurons = pycann_malloc(net, sizeof(pycann_float_t*)*size);
   net->mod_weights = pycann_malloc(net, sizeof(pycann_float_t)*size);
-  net->inputs = pycann_malloc(net, sizeof(pycann_float_t)*num_outputs);
+  net->inputs = pycann_malloc(net, sizeof(pycann_float_t)*num_inputs);
 
   // set values
   net->size = size;
@@ -220,6 +220,9 @@ void pycann_del(pycann_t *net) {
   free(net->weights);
   free(net->thresholds);
   free(net->activations);
+  free(net->mod_neurons);
+  free(net->mod_weights);
+  free(net->inputs);
   free(net);
 }
 
@@ -472,12 +475,12 @@ pycann_t *pycann_load_file(const char *path, unsigned int num_threads) {
   FILE *fd;
   unsigned int i, j;
   struct pycann_file_header header;
-  pycann_float_t *thresholds;
-  pycann_float_t *activations;
+  double *thresholds;
+  double *activations;
   unsigned int *mod_neurons;
-  pycann_float_t *mod_weights;
-  pycann_float_t *weights;
-  pycann_float_t *inputs;
+  double *mod_weights;
+  double *weights;
+  double *inputs;
 
   // open file
   fd = fopen(path, "rb");
@@ -542,6 +545,9 @@ pycann_t *pycann_load_file(const char *path, unsigned int num_threads) {
   free(weights);
   free(inputs);
 
+  // close file
+  fclose(fd);
+
   return net;
 }
 
@@ -549,12 +555,12 @@ int pycann_save_file(const char *path, pycann_t *net) {
   FILE *fd;
   struct pycann_file_header header;
   unsigned int i, j;
-  pycann_float_t *thresholds;
-  pycann_float_t *activations;
+  double *thresholds;
+  double *activations;
   unsigned int *mod_neurons;
-  pycann_float_t *mod_weights;
-  pycann_float_t *weights;
-  pycann_float_t *inputs;
+  double *mod_weights;
+  double *weights;
+  double *inputs;
 
   // open file
   fd = fopen(path, "w");
@@ -575,12 +581,12 @@ int pycann_save_file(const char *path, pycann_t *net) {
   fwrite(&header, sizeof(header), 1, fd);
 
   // create buffers
-  thresholds = malloc(sizeof(pycann_float_t)*net->size);
-  activations = malloc(sizeof(pycann_float_t)*net->size);
+  thresholds = malloc(sizeof(double)*net->size);
+  activations = malloc(sizeof(double)*net->size);
   mod_neurons = malloc(sizeof(unsigned int)*net->size);
-  mod_weights = malloc(sizeof(pycann_float_t)*net->size);
-  weights = malloc(sizeof(pycann_float_t)*net->size*net->size);
-  inputs = malloc(sizeof(pycann_float_t)*net->num_inputs);
+  mod_weights = malloc(sizeof(double)*net->size);
+  weights = malloc(sizeof(double)*net->size*net->size);
+  inputs = malloc(sizeof(double)*net->num_inputs);
 
   // fill in buffers
   for (i=0; i<net->size; i=i+1) {
@@ -593,6 +599,7 @@ int pycann_save_file(const char *path, pycann_t *net) {
       weights[i*net->size+j] = (double)PYCANN_WEIGHT(net, i, j);
     }
   }
+
   for (i=0; i<net->num_inputs; i=i+1) {
     inputs[i] = (double)net->inputs[i];
   }
@@ -609,7 +616,10 @@ int pycann_save_file(const char *path, pycann_t *net) {
   fwrite(weights, sizeof(pycann_float_t), net->size*net->size, fd);
   free(weights);
   fwrite(inputs, sizeof(pycann_float_t), net->num_inputs, fd);
-  free(weights);
+  free(inputs);
+
+  // close file
+  fclose(fd);
 
   return 0;
 }

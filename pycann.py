@@ -103,9 +103,9 @@ pycann.Network(path [, num_threads]) """
 
         # these values will never change, so we can hold them here too
         self.size = self.l.pycann_get_size(self.net)
-        self.memory_usage = self.l.pycann_get_memory_usage(self.net)
         self.num_inputs = self.l.pycann_get_num_inputs(self.net)
         self.num_outputs = self.l.pycann_get_num_outputs(self.net)
+        self.memory_usage = self.l.pycann_get_memory_usage(self.net)
         self.num_threads = self.l.pycann_get_num_threads(self.net)
         
     def init_new(self, num_inputs, num_interneurons, num_outputs, num_threads = 1):
@@ -120,7 +120,7 @@ pycann.Network(path [, num_threads]) """
     def init_load(self, path, num_threads = 1):
         """ Loads a neural network from file """
         # load neural network from file
-        self.net = self.l.pycann_load_file(c_char_p(path), num_threads)
+        self.net = self.l.pycann_load_file(path, num_threads)
         if (not self.net):
             raise PyCANNException()
 
@@ -130,139 +130,81 @@ pycann.Network(path [, num_threads]) """
             self.l.pycann_del(self.net)
 
     def get_learning_rate(self):
-        return self.l.pycann_get_learning_rate(self.net).value
+        return self.l.pycann_get_learning_rate(self.net)
 
     def set_learning_rate(self, learning_rate):
-        self.l.pycann_set_learning_rate(self.net, pycann_float_t(learning_rate))
+        self.l.pycann_set_learning_rate(self.net, learning_rate)
 
     def get_gamma(self, i):
         if (i not in range(0, 4)):
             raise AttributeError("Invalid index: "+repr(i))
-        return self.l.pycann_get_gamma(self.net, c_uint(i)).value
+        return self.l.pycann_get_gamma(self.net, i)
 
     def set_gamma(self, i, gamma):
         if (i not in range(0, 4)):
             raise AttributeError("Invalid index: "+repr(i))
-        self.l.pycann_set_gamma(self.net, c_uint(i), pycann_float_t(gamma))
+        self.l.pycann_set_gamma(self.net, i, gamma)
 
     def get_weight(self, i, j):
-        return self.l.pycann_get_weight(self.net, c_uint(i), c_uint(j)).value
+        return self.l.pycann_get_weight(self.net, i, j)
     
     def set_weight(self, i, j, weight):
-        self.l.pycann_set_weight(self.net, c_uint(i), c_uint(j), pycann_float_t(weight))
+        self.l.pycann_set_weight(self.net, i, j, weight)
 
     def get_threshold(self, i):
-        return __libpycann__.pycann_get_threshold(self.net, c_uint(i)).value
+        return __libpycann__.pycann_get_threshold(self.net, i)
 
     def set_threshold(self, i, threshold):
-        self.l.pycann_set_threshold(self.net, c_uint(i), pycann_float_t(threshold))
+        self.l.pycann_set_threshold(self.net, i, threshold)
 
     def get_activation(self, i):
-        return self.l.pycann_get_activation(self.net, c_uint(i)).value
+        return self.l.pycann_get_activation(self.net, i)
 
     def set_activation(self, i, activation):
-        self.l.pycann_set_activation(self.net, c_uint(i), pycann_float_t(activation))
+        self.l.pycann_set_activation(self.net, i, activation)
 
     def get_mod_connection(self, i):
-        n = self.l.pycann_get_mod_neuron(self.net, c_uint(i)).value
-        w = self.l.pycann_get_mod_weight(self.net, c_uint(i)).value
+        n = self.l.pycann_get_mod_neuron(self.net, i)
+        w = self.l.pycann_get_mod_weight(self.net, i)
         return n, w
 
     def set_mod_connection(self, i, j, weight):
-        self.l.pycann_set_mod(self.net, c_uint(i), c_uint(j), pycann_float_t(weight))
+        self.l.pycann_set_mod(self.net, i, j, weight)
 
     def set_random_weights(self, connrate = 1.0):
-        self.l.pycann_set_random_weights(self.net, pycann_float_t(connrate))
+        self.l.pycann_set_random_weights(self.net, connrate)
 
     def step(self, n = 1):
-        self.l.pycann_step(self.net, c_uint(n))
+        self.l.pycann_step(self.net, n)
 
-__all__ = [Network]
+    def save(self, path):
+        if (self.l.pycann_save_file(path, self.net)==-1):
+            raise PyCANNException()
+
+__all__ = ["Network"]
 
 
 if (__name__=="__main__"):
-    import random
-    import time
-    import pickle
+    #net = Network(5, 10, 5)
+    net = Network("test.net")
 
-    class Timer:
-        def start(self, text = None):
-            self.text = text
-            if (text!=None):
-                print(text, end=": ")
-            self.t = self.time()
+    tests = [(net.get_learning_rate,),
+             (net.set_learning_rate, 1.0),
+             (net.get_gamma, 0),
+             (net.set_gamma, 0, 1.0),
+             (net.get_weight, 0, 1),
+             (net.set_weight, 0, 1, 1.0),
+             (net.get_threshold, 0),
+             (net.set_threshold, 0, 1.0),
+             (net.get_activation, 0),
+             (net.set_activation, 0, 1.0),
+             (net.get_mod_connection, 0),
+             (net.set_mod_connection, 0, 1, 1.0),
+             #(net.set_random_weights, 0.5),
+             (net.step,),
+             (net.save, "test.net")]
 
-        def stop(self):
-            t = self.time()-self.t
-            if (self.text!=None):
-                print(str(t)+"s")
-            return t
+    print("Testing pycann.Network")
+    for t in tests:
+        print(t[0].__name__+"("+(", ".join(map(repr, t[1:])))+") = "+repr(t[0](*t[1:])))
 
-        time = time.time
-
-    #pickle.dump(random.getstate(), open("random.pkl", "wb"))
-    random.setstate(pickle.load(open("random.pkl", "rb")))
-
-    T = Timer()
-    N = list(map(lambda x: int(10**(0.1*x)), range(10, 41)))
-    #N = [1000]
-    connrate = 0.75
-    steps = 10
-    threads = 1
-    performance = []
-
-    for neurons in N:
-        net = Network(0, neurons, 0, threads)
-
-        # connect neurons
-        #T.start("Connecting neurons")
-        #for i in range(neurons):
-        #    for j in range(int(neurons*connrate)):
-        #        net.set_weight(i, j, random.uniform(-1.0, 1.0))
-        #T.stop()
-        net.set_random_weights(0.75)
-
-        # learning
-        #net.set_learning_rate(1.0)
-        #T.start("Connecting modularity neurons")
-        #for i in range(neurons):
-        #    w = random.uniform(-1.0, 1.0)
-        #    if (abs(w)<0.05): # 95% neurons have a modularity neuron
-        #        w = 0.0
-        #    net.set_mod_connection(i, random.randrange(neurons), w)
-        #T.stop()
-
-        # run
-        T.start()
-        net.step(steps)
-        t = T.stop()
-
-        # print statistics
-        # NOTE we need to get down to 1ms per step to have a realistic simulation.
-        connections = int(neurons**2*connrate)
-        print()
-        print("Statistics:")
-        print("Neurons:     "+str(net.size))
-        print("Connections: "+str(connections))
-        print("             "+str(connections/neurons)+" per neuron")
-        print("Threads:     "+str(net.num_threads))
-        print("Steps:       "+str(steps))
-        print("Time:        "+str(t)+"s")
-        print("             "+str(t/steps)+"s/step")
-        print("             "+str(t/(neurons*steps))+"s/(neuron*step)")
-        print("             "+str(t/(connections*steps))+"s/(connection*step)")
-        print("Memory:      "+str(net.memory_usage/1024)+"kB")
-
-        # record performace
-        performance.append((neurons, connections, t/steps, net.memory_usage))
-
-    fn = "performance_without_learning"
-    pickle.dump(performance, open(fn+".pkl", "wb"))
-
-    f = open(fn+".txt", "wt")
-    for n in performance:
-        t = n[2]/n[1]
-        l = str(n[0])+":\t "+str(t*1000000000)+"ns"
-        print(l)
-        print(l, file = f)
-    f.close()
