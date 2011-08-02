@@ -1,0 +1,184 @@
+/*
+ pycann - Neural network library
+ A Python/C hybrid for fast neural networks in Python
+ Copyright (C) 2010  Janosch Gräf <janosch.graef@gmx.net>
+
+ This program is free software: you can redistribute it and/or modify
+ it under the terms of the GNU Lesser General Public License as published by
+ the Free Software Foundation, either version 3 of the License, or
+ (at your option) any later version.
+
+ This program is distributed in the hope that it will be useful,
+ but WITHOUT ANY WARRANTY; without even the implied warranty of
+ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ GNU Lesser General Public License for more details.
+
+ You should have received a copy of the GNU Lesser General Public License
+ along with this program.  If not, see <http://www.gnu.org/licenses/>.
+*/
+
+#include "pycann.nxh"
+
+#define SHOW_INFO
+
+int wait_button() {
+  // Wait til all buttons are released
+  while (ButtonPressed(BTNLEFT, TRUE) || ButtonPressed(BTNRIGHT, TRUE) || ButtonPressed(BTNCENTER, TRUE)) {
+    Wait(50);
+  }
+
+  // Wait til button is pressed
+  while (TRUE) {
+    if (ButtonPressed(BTNLEFT, TRUE)) {
+      return BTNLEFT;
+    }
+    else if (ButtonPressed(BTNRIGHT, TRUE)) {
+      return BTNRIGHT;
+    }
+    else if (ButtonPressed(BTNCENTER, TRUE)) {
+      return BTNCENTER;
+    }
+
+    Wait(50);
+  }
+}
+
+#ifdef SHOW_INFO
+sub pycann_net_info(pycann_t &net) {
+  unsigned int pages, btn, page, n, i;
+
+  if (net.size<6) {
+    n = net.size;
+  }
+  else {
+    n = 6;
+  }
+  pages = 3+net.size;
+
+  while (TRUE) {
+    // TODO write lines
+    ClearScreen();
+    TextOut(0, LCD_LINE8, StrCat("Page ", NumToStr(page+1), "/", NumToStr(pages)));
+    if (page==0) { // general info
+      TextOut(0, LCD_LINE1, "pyCANN network");
+      TextOut(0, LCD_LINE3, StrCat("Size:    ", NumToStr(net.size)));
+      TextOut(0, LCD_LINE4, StrCat("Inputs:  ", NumToStr(net.num_inputs)));
+      TextOut(0, LCD_LINE5, StrCat("Outputs: ", NumToStr(net.num_outputs)));
+    }
+    else if (page==1) {
+      TextOut(0, LCD_LINE1, "Thresholds");
+      for (i=0; i<n; i++) {
+        TextOut(0, LCD_LINE2-i*8, StrCat("t", NumToStr(i), ": ", FormatNum("%f", net.thresholds[i])));
+      }
+    }
+    else if (page==2) {
+      TextOut(0, LCD_LINE1, "Activations");
+      for (i=0; i<n; i++) {
+        TextOut(0, LCD_LINE2-i*8, StrCat("a", NumToStr(i), ": ", FormatNum("%f", net.activations[i])));
+      }
+    }
+    else if (page>2 && page<3+net.size) {
+      TextOut(0, LCD_LINE1, StrCat("Weights ", NumToStr(page-3)));
+      for (i=0; i<n; i++) {
+        TextOut(0, LCD_LINE2-i*8, StrCat("w", NumToStr(page-3), ",", NumToStr(i), ": ", FormatNum("%f", net.weights[page-3][i])));
+      }
+    }
+
+    // wait for btn press
+    btn = wait_button();
+    if (btn==BTNLEFT && page>0) {
+      page--;
+    }
+    else if (btn==BTNRIGHT && page<pages-1) {
+      page++;
+    }
+    else if (btn==BTNCENTER) {
+      ClearScreen();
+      return;
+    }
+  }
+}
+#endif /* SHOW_INFO */
+
+task main() {
+  pycann_t net;
+  int ret, i, s;
+  string gate_files[3] = {"or.rnn", "and.rnn", "xor.rnn"};
+  float test_inputs[4][2] = {{0.0, 0.0}, {0.0, 1.0}, {1.0, 0.0}, {1.0, 1.0}};
+  float test_input[2];
+  float test_output[1] = {1.2};
+  unsigned long t[5];
+
+  // Select gate
+  s = 0;
+  while (TRUE) {
+    ClearScreen();
+    TextOut(0, LCD_LINE1, "Select ANN file");
+    for (i=0; i<3; i++) {
+      if (i==s) {
+        TextOut(0, LCD_LINE3-i*8, StrCat("> ", gate_files[i], " <"));
+      }
+      else {
+        TextOut(0, LCD_LINE3-i*8, StrCat("  ", gate_files[i]));
+      }
+    }
+    ret = wait_button();
+    if (ret==BTNLEFT) {
+      s--;
+      s = s==-1?2:s;
+    }
+    else if (ret==BTNRIGHT) {
+      s = (s+1)%3;
+    }
+    else if (ret==BTNCENTER) {
+      break;
+    }
+  }
+
+  // Load Network
+  ClearScreen();
+  t[0] = CurrentTick();
+  ret = pycann_load(net, gate_files[s]);
+  t[1] = CurrentTick();
+  if (ret!=0) {
+    TextOut(0, LCD_LINE1, StrCat("Error: ", NumToStr(ret)));
+    TextOut(0, LCD_LINE2, "Press any button");
+    wait_button();
+  }
+  else {
+#ifdef SHOW_INFO
+    TextOut(0, LCD_LINE1, StrCat("Loaded ", gate_files[s]));
+    TextOut(0, LCD_LINE2, "Press any button");
+    wait_button();
+    pycann_net_info(net);
+#endif /* SHOW_INFO */
+
+    ClearScreen();
+    TextOut(0, LCD_LINE1, StrCat("Test ", gate_files[s]));
+    TextOut(0, LCD_LINE2, "Press any button");
+    wait_button();
+
+    ClearScreen();
+    TextOut(0, LCD_LINE1, StrCat("Test ", gate_files[s]));
+    t[4] = 0;
+    for (i=0; i<4; i++) {
+      test_input = test_inputs[i];
+      pycann_set_input(net, test_input);
+      t[2] = CurrentTick();
+      pycann_steps(net, 5);
+      t[3] = CurrentTick();
+      t[4] += t[3]-t[2]; // dt
+      pycann_get_output(net, test_output);
+      TextOut(0, LCD_LINE3-i*8, StrCat(FormatNum("%.1f", test_inputs[i][0]), ", ", FormatNum("%.1f", test_inputs[i][1]), " -> ", FormatNum("%.1f", test_output[0])));
+    }
+    wait_button();
+
+    ClearScreen();
+    TextOut(0, LCD_LINE1, "Performance");
+    TextOut(0, LCD_LINE3, StrCat("Load:  ", NumToStr(t[1]-t[0]), "ms"));
+    TextOut(0, LCD_LINE4,        "Steps: 20");
+    TextOut(0, LCD_LINE5, StrCat("Run:   ", NumToStr(t[4]), "ms"));
+    TextOut(0, LCD_LINE6, StrCat("Step:  ", NumToStr(t[4]/20), "ms"));
+    wait_button();
+  }
+}
