@@ -21,6 +21,8 @@
 #include <stdarg.h> /* va_list, va_start, va_end */
 #include <stdio.h> /* vsnprintf, fopen, fclose, fread, fwrite */
 #include <string.h> /* memcpy */
+#include <stdint.h> /* uint16_t, uint32_t */
+#include <math.h> /* exp */
 
 #ifdef PYCANN_THREADING
 #include <pthread.h>
@@ -129,9 +131,11 @@ pycann_t *pycann_new(unsigned int size, unsigned int num_inputs, unsigned int nu
   // allocate memory
   net = malloc(sizeof(pycann_t));
   net->memory_usage = sizeof(pycann_t);
+  net->gammas = pycann_malloc(net, sizeof(pycann_float_t)*4*size);
   net->weights = pycann_malloc(net, sizeof(pycann_float_t)*size*size);
   net->thresholds = pycann_malloc(net, sizeof(pycann_float_t)*size);
   net->activations = pycann_malloc(net, sizeof(pycann_float_t)*size);
+  net->activation_functions = pycann_malloc(net, sizeof(pycann_activation_function_t)*size);
   net->mod_neurons = pycann_malloc(net, sizeof(pycann_float_t*)*size);
   net->mod_weights = pycann_malloc(net, sizeof(pycann_float_t)*size);
   net->inputs = pycann_malloc(net, sizeof(pycann_float_t)*num_inputs);
@@ -139,20 +143,20 @@ pycann_t *pycann_new(unsigned int size, unsigned int num_inputs, unsigned int nu
   // set values
   net->size = size;
   net->learning_rate = 0.0;
-  net->gamma[0] = 0.0;
-  net->gamma[1] = 0.0;
-  net->gamma[2] = 0.0;
-  net->gamma[3] = 0.0;
   net->num_inputs = num_inputs;
   net->num_outputs = num_outputs;
 
   // init weights, thresholds, activations and modularity connections
   for (i=0; i<size; i=i+1) {
+    for (j=0; j<4; j++) {
+      PYCANN_GAMMA(net, i, j) = 0.0;
+    }
     for (j=0; j<size; j=j+1) {
       PYCANN_WEIGHT(net, i, j) = 0.0;
     }
     net->thresholds[i] = 0.0;
     net->activations[i] = 0.0;
+    net->activation_functions[i] = PYCANN_SIGMOID_STEP;
     net->mod_neurons[i] = net->activations;
     net->mod_weights[i] = 0.0;
   }
@@ -193,11 +197,6 @@ pycann_t *pycann_new(unsigned int size, unsigned int num_inputs, unsigned int nu
       break;
     }
   }
-
-  printf("Neuron disposal:\n");
-  for (i=0; i<num_threads; i=i+1) {
-    printf("  Thread #%d: [% 5d, % 5d)\n", i, net->threads[i].first_neuron, net->threads[i].last_neuron);
-  }
 #endif /* PYCANN_THREADING */
 
   return net;
@@ -217,6 +216,7 @@ void pycann_del(pycann_t *net) {
   free(net->threads);
 #endif /* PYCANN_THREADING */
 
+  free(net->gammas);
   free(net->weights);
   free(net->thresholds);
   free(net->activations);
@@ -264,22 +264,46 @@ void pycann_set_learning_rate(pycann_t *net, pycann_float_t v) {
   net->learning_rate = v;
 }
 
-// Get gamma i
-pycann_float_t pycann_get_gamma(pycann_t *net, unsigned int i) {
-  if (i<4) {
-    return net->gamma[i];
+// Get activation function
+pycann_activation_function_t pycann_get_activation_function(pycann_t *net, unsigned int i) {
+  if (i<net->size) {
+    return net->activation_functions[i];
   }
   else {
-    pycann_set_error("Invalid gamma index: %d", i);
-    return 0.0;
+    return 0;
   }
 }
-// Set gamma i
-void pycann_set_gamma(pycann_t *net, unsigned int i, pycann_float_t v) {
-  if (i<4) {
-    net->gamma[i] = v;
+// Set activation function
+void pycann_set_activation_function(pycann_t *net, unsigned int i, pycann_activation_function_t activation_function) {
+  if (i<net->size) {
+    net->activation_functions[i] = activation_function;
   }
 }
+
+
+
+
+// Get gamma
+void pycann_get_gamma(pycann_t *net, unsigned int i, pycann_float_t *gamma) {
+  if (i<net->size) {
+    memcpy(gamma, net->gammas+(i*4), 4*sizeof(pycann_float_t));
+  }
+  else {
+    pycann_set_error("Invalid neuron index: %d", i);
+  }
+}
+// Set gamma
+void pycann_set_gamma(pycann_t *net, unsigned int i, pycann_float_t *gamma) {
+  if (i<net->size) {
+    memcpy(net->gammas+(i*4), gamma, 4*sizeof(pycann_float_t));
+  }
+  else {
+    pycann_set_error("Invalid neuron index: %d", i);
+  }
+}
+
+
+
 
 // Get weight
 pycann_float_t pycann_get_weight(pycann_t *net, unsigned int i, unsigned int j) {
@@ -297,14 +321,17 @@ void pycann_set_weight(pycann_t *net, unsigned int i, unsigned int j, pycann_flo
   }
 }
 // Set random weights
+// FIXME: Definetely does NOT work!
 void pycann_set_random_weights(pycann_t *net, pycann_float_t connection_rate) {
   unsigned int i, j, n;
+  pycann_float_t sign;
 
   if (connection_rate>=0.0 && connection_rate<=1.0) {
     n = (int)(connection_rate*net->size);
     for (i=0; i<net->size; i=i+1) {
       for (j=0; j<n; j=j+1) {
-        PYCANN_WEIGHT(net, i, j) = (pycann_float_t)(((double)rand())/((double)RAND_MAX));
+	sign = rand()&1?+1.0:-1.0;
+        PYCANN_WEIGHT(net, i, j) = sign * (pycann_float_t)(((double)rand())/((double)RAND_MAX));
       }
     }
   }
@@ -345,9 +372,7 @@ void pycann_set_activation(pycann_t *net, unsigned int i, pycann_float_t v) {
 // Get modularity neuron
 unsigned int pycann_get_mod_neuron(pycann_t *net, unsigned int i) {
   if (i<net->size) {
-    // TODO convert pointer to index
-    return 0;
-    //return net->mod_neurons[i];
+    return net->mod_neurons[i]-net->activations;
   }
   else {
     return 0;
@@ -376,10 +401,11 @@ void pycann_set_inputs(pycann_t *net, pycann_float_t *inputs) {
 }
 // Get outputs
 void pycann_get_outputs(pycann_t *net, pycann_float_t *outputs) {
-  unsigned int i;
+  unsigned int i, o;
 
-  for (i=net->size-net->num_outputs; i<net->size; i=i+1) {
-    outputs[i] = net->activations[i];
+  o = net->size-net->num_outputs;
+  for (i=0; i<net->num_outputs; i=i+1) {
+    outputs[i] = net->activations[o+i];
   }
 }
 // Get number of inputs
@@ -391,6 +417,11 @@ unsigned int pycann_get_num_outputs(pycann_t *net) {
   return net->num_outputs;
 }
 
+// Sigmoidal approximation
+static pycann_float_t pycann_sigmoid_approx(pycann_float_t x) {
+  return x>=0.0?1.0:0.0; // TODO
+}
+
 // Internals of a neuron (propagation and activation function)
 static pycann_float_t pycann_neuron_internal(pycann_t *net, unsigned int i) {
   unsigned int j;
@@ -398,6 +429,7 @@ static pycann_float_t pycann_neuron_internal(pycann_t *net, unsigned int i) {
 
   t = net->thresholds[i];
 
+  // propagation
   if (i<net->num_inputs) {
     o = net->inputs[i];
   }
@@ -405,7 +437,7 @@ static pycann_float_t pycann_neuron_internal(pycann_t *net, unsigned int i) {
     u = net->activations[i];
     o = 0.0;
     mw = net->mod_weights[i];
-    m = (*net->mod_neurons[i])*mw;
+    m = (*net->mod_neurons[i]) * mw * net->learning_rate;
 
     for (j=0; j<net->size; j=j+1) {
       w = PYCANN_WEIGHT(net, i, j);
@@ -413,17 +445,25 @@ static pycann_float_t pycann_neuron_internal(pycann_t *net, unsigned int i) {
       o = o+w*v;
 
       if (m!=0.0) {
-        dw = m*(net->gamma[0]*u*v + net->gamma[1]*u + net->gamma[2]*v + net->gamma[4]);
+        dw = (signbit(w)?-1.0:1.0) * m * (PYCANN_GAMMA(net, i, 0)*u*v + PYCANN_GAMMA(net, i, 1)*v + PYCANN_GAMMA(net, i, 2)*u + PYCANN_GAMMA(net, i, 3));
         PYCANN_WEIGHT(net, i, j) = w+dw;
-      }
-      else if (o>t) {
-        // we can abort since threshold is already exceeded and no learning is done
-        return 1.0;
       }
     }
   }
 
-  return o>t?1.0:0.001; // change 0.1 to 0.0 later
+  // activations
+  switch (net->activation_functions[i]) {
+    case PYCANN_SIGMOID_STEP:
+      return o>=t?1.0:0.0;
+    case PYCANN_SIGMOID_EXP:
+      return 1.0/(1.0+exp(PYCANN_SIGMOID_BETA*(t-o)));
+    case PYCANN_SIGMOID_APPROX:
+      return pycann_sigmoid_approx(t-o);
+    case PYCANN_LINEAR:
+      return o>1.0?1.0:(o<-0.0?0.0:o);
+    default:
+      return 0.0;
+  }
 }
 
 // Do a single step in a neural network (from neuron 'first' upto (excluding) neuron 'last')
@@ -469,29 +509,25 @@ void pycann_step(pycann_t *net, unsigned int n) {
 #endif /* PYCANN_THREADING */
 }
 
-// Load network from file
+// Loads network from pycann format file
+// File extension .pcn
 pycann_t *pycann_load_file(const char *path, unsigned int num_threads) {
   pycann_t *net;
   FILE *fd;
-  unsigned int i, j;
-  struct pycann_file_header header;
-  double *thresholds;
-  double *activations;
+  unsigned int i;
   unsigned int *mod_neurons;
-  double *mod_weights;
-  double *weights;
-  double *inputs;
+  struct pycann_file_header header;
 
   // open file
   fd = fopen(path, "rb");
   if (fd==NULL) {
-    pycann_set_error("Can't open file: %s\n", path);
+    pycann_set_error("Can't open file (for reading): %s\n", path);
     return NULL;
   }
 
   // load header
   fread(&header, sizeof(header), 1, fd);
-  if (memcmp(header.signature, PYCANN_FILE_SIGNATURE, PYCANN_FILE_SIGNATURE_LENGTH)!=0) {
+  if (memcmp(header.magic, PYCANN_FILE_MAGIC, PYCANN_FILE_MAGIC_LENGTH)!=0) {
     pycann_set_error("Invalid file signature: %s\n", path);
     fclose(fd);
     return NULL;
@@ -503,47 +539,23 @@ pycann_t *pycann_load_file(const char *path, unsigned int num_threads) {
     fclose(fd);
     return NULL;
   }
-  net->learning_rate = (pycann_float_t)header.learning_rate;
-  for (i=0; i<4; i=i+1) {
-    net->gamma[i] = (pycann_float_t)header.gamma[i];
-  }
+  net->learning_rate = header.learning_rate;
 
-  // create buffers and load data
-  thresholds = malloc(sizeof(pycann_float_t)*header.size);
-  fread(thresholds, sizeof(pycann_float_t), header.size, fd);
-  activations = malloc(sizeof(pycann_float_t)*header.size);
-  fread(activations, sizeof(pycann_float_t), header.size, fd);
+  // load weights, etc.
+  fread(net->gammas, 4*sizeof(pycann_float_t), header.size, fd);
+  fread(net->weights, sizeof(pycann_float_t), header.size*header.size, fd);
+  fread(net->thresholds, sizeof(pycann_float_t), header.size, fd);
+  fread(net->activations, sizeof(pycann_float_t), header.size, fd);
+  fread(net->mod_weights, sizeof(pycann_float_t), header.size, fd);
+  fread(net->inputs, sizeof(pycann_float_t), header.num_inputs, fd);
+  fread(net->activation_functions, sizeof(pycann_activation_function_t), net->size, fd);
+  // load mod_neurons
   mod_neurons = malloc(sizeof(unsigned int)*header.size);
   fread(mod_neurons, sizeof(unsigned int), header.size, fd);
-  mod_weights = malloc(sizeof(pycann_float_t)*header.size);
-  fread(mod_weights, sizeof(pycann_float_t), header.size, fd);
-  weights = malloc(sizeof(pycann_float_t)*header.size*header.size);
-  fread(weights, sizeof(pycann_float_t), header.size*header.size, fd);
-  inputs = malloc(sizeof(pycann_float_t)*header.num_inputs);
-  fread(inputs, sizeof(pycann_float_t), header.num_inputs, fd);
-
-  // load thresholds, activations and weights
-  for (i=0; i<header.size; i=i+1) {
-    net->thresholds[i] = (pycann_float_t)thresholds[i];
-    net->activations[i] = (pycann_float_t)activations[i];
-    pycann_set_mod(net, i, mod_neurons[i], (pycann_float_t)mod_weights[i]);
-    for (j=0; j<header.size; j=j+1) {
-      PYCANN_WEIGHT(net, i, j) = (pycann_float_t)weights[i*header.size+j];
-    }
+  for (i=0; i<header.size; i++) {
+    net->mod_neurons[i] = net->activations+mod_neurons[i];
   }
-
-  // load input data
-  for (i=0; i<header.num_inputs; i=i+1) {
-    net->inputs[i] = (pycann_float_t)inputs[i];
-  }
-
-  // free buffers
-  free(thresholds);
-  free(activations);
   free(mod_neurons);
-  free(mod_weights);
-  free(weights);
-  free(inputs);
 
   // close file
   fclose(fd);
@@ -551,74 +563,99 @@ pycann_t *pycann_load_file(const char *path, unsigned int num_threads) {
   return net;
 }
 
+// Saves network into the pycann format file
+// File extension .pcn
 int pycann_save_file(const char *path, pycann_t *net) {
   FILE *fd;
   struct pycann_file_header header;
-  unsigned int i, j;
-  double *thresholds;
-  double *activations;
+  unsigned int i;
   unsigned int *mod_neurons;
-  double *mod_weights;
-  double *weights;
-  double *inputs;
 
   // open file
   fd = fopen(path, "w");
   if (fd==NULL) {
-    pycann_set_error("Can't open file: %s\n", path);
+    pycann_set_error("Can't open file (for writing): %s\n", path);
     return -1;
   }
 
   // fill in header
-  memcpy(header.signature, PYCANN_FILE_SIGNATURE, PYCANN_FILE_SIGNATURE_LENGTH);
+  memcpy(header.magic, PYCANN_FILE_MAGIC, PYCANN_FILE_MAGIC_LENGTH);
   header.size = net->size;
-  header.learning_rate = (double)net->learning_rate;
-  for (i=0; i<4; i=i+1) {
-    header.gamma[i] = (double)net->gamma[i];
-  }
+  header.learning_rate = net->learning_rate;
   header.num_inputs = net->num_inputs;
   header.num_outputs = net->num_outputs;
   fwrite(&header, sizeof(header), 1, fd);
 
-  // create buffers
-  thresholds = malloc(sizeof(double)*net->size);
-  activations = malloc(sizeof(double)*net->size);
+  // write weights, etc.
+  fwrite(net->gammas, 4*sizeof(pycann_float_t), net->size, fd);
+  fwrite(net->weights, sizeof(pycann_float_t), net->size*net->size, fd);
+  fwrite(net->thresholds, sizeof(pycann_float_t), net->size, fd);
+  fwrite(net->activations, sizeof(pycann_float_t), net->size, fd);
+  fwrite(net->mod_weights, sizeof(pycann_float_t), net->size, fd);
+  fwrite(net->inputs, sizeof(pycann_float_t), net->num_inputs, fd);
+  fwrite(net->activation_functions, sizeof(pycann_activation_function_t), net->size, fd);
+  // write mod neurons
   mod_neurons = malloc(sizeof(unsigned int)*net->size);
-  mod_weights = malloc(sizeof(double)*net->size);
-  weights = malloc(sizeof(double)*net->size*net->size);
-  inputs = malloc(sizeof(double)*net->num_inputs);
-
-  // fill in buffers
-  for (i=0; i<net->size; i=i+1) {
-    thresholds[i] = (double)net->thresholds[i];
-    activations[i] = (double)net->activations[i];
-    pycann_set_mod(net, i, mod_neurons[i], (pycann_float_t)mod_weights[i]);
-    mod_neurons[i] = (double)pycann_get_mod_neuron(net, i);
-    mod_weights[i] = (double)net->mod_weights[i];
-    for (j=0; j<net->size; j=j+1) {
-      weights[i*net->size+j] = (double)PYCANN_WEIGHT(net, i, j);
-    }
+  for (i=0; i<header.size; i++) {
+    mod_neurons[i] = net->mod_neurons[i]-net->activations;
   }
-
-  for (i=0; i<net->num_inputs; i=i+1) {
-    inputs[i] = (double)net->inputs[i];
-  }
-
-  // write & free buffers
-  fwrite(thresholds, sizeof(pycann_float_t), net->size, fd);
-  free(thresholds);
-  fwrite(activations, sizeof(pycann_float_t), net->size, fd);
-  free(activations);
   fwrite(mod_neurons, sizeof(unsigned int), net->size, fd);
   free(mod_neurons);
-  fwrite(mod_weights, sizeof(pycann_float_t), net->size, fd);
-  free(mod_weights);
-  fwrite(weights, sizeof(pycann_float_t), net->size*net->size, fd);
-  free(weights);
-  fwrite(inputs, sizeof(pycann_float_t), net->num_inputs, fd);
-  free(inputs);
 
   // close file
+  fclose(fd);
+
+  return 0;
+}
+
+// Exports into the pycann embedded format
+// File extension: .rnn
+// TODO export gamma and learning rate
+int pycann_export_embedded(const char *path, pycann_t *net, int format) {
+  FILE *fd;
+  unsigned int i;
+  uint16_t tmp;
+
+  // TODO check if net is exportable
+
+  // currently only NXT is supported
+  if (format!=PYCANN_EMBEDDED_NXT) {
+    return -1;
+  }
+
+  // open output file
+  fd = fopen(path, "w");
+  if (fd==NULL) {
+    pycann_set_error("Can't open file (for writing): %s\n", path);
+    return -1;
+  }
+
+  // write signature
+  fwrite("RN", 1, 2, fd);
+  // write format version
+  fputc(PYCANN_EMBEDDED_VERSION, fd);
+  // write network size
+  tmp = net->size;
+  fwrite(&tmp, sizeof(tmp), 1, fd);
+  // write number of inputs
+  tmp = net->num_inputs;
+  fwrite(&tmp, sizeof(tmp), 1, fd);
+  // write number of outputs
+  tmp = net->num_outputs;
+  fwrite(&tmp, sizeof(tmp), 1, fd);
+  // write learning rate and gamma
+  fwrite(&net->learning_rate, sizeof(pycann_float_t), 1, fd);
+
+  // write gammas, thresholds and weights
+  fwrite(net->gammas, 4*sizeof(pycann_float_t), net->size, fd);
+  fwrite(net->weights, sizeof(pycann_float_t), net->size*net->size, fd);
+  fwrite(net->thresholds, sizeof(pycann_float_t), net->size, fd);
+  // write activation functions
+  for (i=0; i<net->size; i=i+1) {
+    fputc(net->activation_functions[i], fd);
+  }
+
+  // clean up
   fclose(fd);
 
   return 0;

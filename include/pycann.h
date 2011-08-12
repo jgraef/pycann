@@ -27,10 +27,40 @@
 #include <pthread.h>
 #endif /* PYCANN_THREADING */
 
+#ifdef PYCANN_VISUALIZATION
+#include <graphvis.h>
+#endif /* PYCANN_VISUALIZATION */
 
+// Macro for easy access to weights
 #define PYCANN_WEIGHT(net, a, b) ((net)->weights[(a)*(net)->size+(b)])
 
+// Macro for easy access to gammas
+#define PYCANN_GAMMA(net, a, b) ((net)->gammas[(a)*4+(b)])
+
+// Version of embedded format
+#define PYCANN_EMBEDDED_VERSION 1
+
+
+// Type for embedded file formats
+enum {
+  PYCANN_EMBEDDED_NONE = 0, // Invalid embedded format
+  PYCANN_EMBEDDED_NXT  = 1  // embedded format for LEGO Mindstorms NXT
+} pycann_embedded_format_t;
+
+// pycann floating point type
 typedef float pycann_float_t;
+
+// Stepness of exponential sigmoid function
+#define PYCANN_SIGMOID_BETA 10.0
+
+// activation functions
+typedef enum {
+  PYCANN_INVALID_ACTIVATION_FUNCTION = 0,
+  PYCANN_SIGMOID_STEP                = 1,
+  PYCANN_SIGMOID_EXP                 = 2,
+  PYCANN_SIGMOID_APPROX              = 3,
+  PYCANN_LINEAR                      = 4
+} pycann_activation_function_t;
 
 typedef struct pycann_struct pycann_t;
 
@@ -39,8 +69,8 @@ typedef struct pycann_thread_struct pycann_thread_t;
 
 struct pycann_thread_struct {
   pthread_t thread;
-  unsigned int first_neuron;
-  unsigned int last_neuron; // actually this is the neuron after the last one
+  pycann_neuron_t first_neuron;
+  pycann_neuron_t last_neuron; // actually this is the neuron after the last one
   unsigned int steps;
 };
 #endif /* PYCANN_THREADING */
@@ -52,11 +82,15 @@ struct pycann_struct {
   // Network-wide learning rate
   pycann_float_t learning_rate;
 
-  // Gamma coefficients for Hebbian plasticity rule
-  pycann_float_t gamma[4];
+  // Gamma coefficients for Hebbian plasticity rule (4 values per neuron)
+  // gamma[4*i+0]: pre- and post-synaptic neuron fire
+  // gamma[4*i+1]: pre-synaptic neuron fires
+  // gamma[4*i+2]: post-synaptic neuron fires
+  // gamma[4*i+3]: constant change (NOTE: usually used for weight decay => value negative)
+  pycann_float_t *gammas;
 
-  // Weights (see macro PYCANN_WEIGHT)
-  pycann_float_t *weights;
+  // Activation functions
+  pycann_activation_function_t *activation_functions;
 
   // Thresholds
   pycann_float_t *thresholds;
@@ -64,9 +98,11 @@ struct pycann_struct {
   // Activation potentials
   pycann_float_t *activations;
 
+  // Weights (see macro PYCANN_WEIGHT)
+  pycann_float_t *weights;
+
   // Modularity connections
   pycann_float_t *mod_weights;
-  //unsigned int *mod_neurons;
   pycann_float_t **mod_neurons;
 
   // Memory usage
@@ -86,14 +122,13 @@ struct pycann_struct {
 #endif /* PYCANN_THREADING */
 };
 
-#define PYCANN_FILE_SIGNATURE "PYCANN_NETWORK\0\1"
-#define PYCANN_FILE_SIGNATURE_LENGTH 16
+#define PYCANN_FILE_MAGIC "PYCANN_NETWORK\0\3"
+#define PYCANN_FILE_MAGIC_LENGTH 16
 struct pycann_file_header {
-  char signature[PYCANN_FILE_SIGNATURE_LENGTH];
+  char magic[PYCANN_FILE_MAGIC_LENGTH];
 
   unsigned int size;
-  double learning_rate;
-  double gamma[4];
+  pycann_float_t learning_rate;
   unsigned int num_inputs;
   unsigned int num_outputs;
 };
@@ -113,8 +148,11 @@ unsigned int pycann_get_num_threads(pycann_t *net);
 pycann_float_t pycann_get_learning_rate(pycann_t *net);
 void pycann_set_learning_rate(pycann_t *net, pycann_float_t v);
 
-pycann_float_t pycann_get_gamma(pycann_t *net, unsigned int i);
-void pycann_set_gamma(pycann_t *net, unsigned int i, pycann_float_t v);
+void pycann_get_gamma(pycann_t *net, unsigned int i, pycann_float_t *gamma);
+void pycann_set_gamma(pycann_t *net, unsigned int i, pycann_float_t *gamma);
+
+pycann_activation_function_t pycann_get_activation_function(pycann_t *net, unsigned int i);
+void pycann_set_activation_function(pycann_t *net, unsigned int i, pycann_activation_function_t activation_function);
 
 pycann_float_t pycann_get_weight(pycann_t *net, unsigned int i, unsigned int j);
 void pycann_set_weight(pycann_t *net, unsigned int i, unsigned int j, pycann_float_t v);
@@ -139,5 +177,6 @@ void pycann_step(pycann_t *net, unsigned int n);
 
 pycann_t *pycann_load_file(const char *path, unsigned int num_threads);
 int pycann_save_file(const char *path, pycann_t *net);
+int pycann_export_embedded(const char *path, pycann_t *net, int format);
 
 #endif /* _PYCANN_H_ */
